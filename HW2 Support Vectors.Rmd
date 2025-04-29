@@ -1,0 +1,633 @@
+---
+title: 'Practical Homework 2: Support Vector Classification'
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r}
+library(Matrix)
+library(ggplot2)
+library(dplyr)
+library(tidyverse)
+library(e1071)
+```
+
+```{r}
+set.seed(1)
+
+disease_data <- read.csv("https://raw.githubusercontent.com/JesseLoi/Support_Vector_Machine_Disease_Classification/main/nhis_2022.csv")
+
+
+```
+
+Let's investigate diabetes. Let's start by checking the different levels for diabetes.
+
+```{r}
+
+unique(disease_data$DIABETICEV)
+
+```
+
+We see that our data has a yes option, a no option, and two unanswered options. We just have to worry about the yes and no options. Let's try and filter out 7 and 9, which correspond to NA.
+
+```{r}
+plot(factor(disease_data$DIABETICEV))
+```
+
+We've got an overwhelming number of 1s.
+
+Let's consider how to resolve this.We might just consider classification error first when move onto something like precision or recall.
+
+But let's consider downsizing our dataset first. Let's check some numbers.
+
+```{r}
+diabetes <- subset(disease_data, DIABETICEV == 2)
+nrow(diabetes)
+```
+
+We've got around 3000 results.
+
+Let's check non-diabetes individuals.
+
+```{r}
+nondiabetes <- subset(disease_data, DIABETICEV == 1)
+nrow(nondiabetes)
+```
+
+This is about 30000 results. This is a lot more. This essentially means that any algorithm aiming to correctly classify the data will have around a 90 percent success rate.
+
+
+```{r}
+diabetes_data <- disease_data %>%
+  filter(DIABETICEV %in% c(1, 2))
+
+```
+
+Let's check our filtering succeeded.
+
+```{r}
+unique(diabetes_data$DIABETICEV)
+diabetes_data$DIABETICEV<-as.factor(diabetes_data$DIABETICEV)
+```
+
+```{r}
+plot(diabetes_data$DIABETICEV, xlab="Diabetes Status")
+```
+
+Let's now see if we can use education level to predict it. Let's clean education level first.
+
+```{r}
+unique(diabetes_data$EDUC)
+```
+
+0, 997, and 999 are all equivalent to saying NA, so we will get rid of them.
+
+```{r}
+diabetes_data$EDUC[diabetes_data$EDUC %in% c(0, 997, 999)] <- NA
+```
+
+Now let's create a new factor level where we can order the levels of education.
+
+```{r}
+unique(diabetes_data$EDUC)
+```
+
+Later on, we will convert education back to numeric since we are going to scale our variables. But for the sake of visualization, we keep it as categorical.
+
+```{r}
+diabetes_data$EDUC<-factor(diabetes_data$EDUC, levels = c(NA, 103, 116,201, 202, 301, 302, 303, 400,501,  505  ), ordered = TRUE)
+
+```
+
+```{r}
+plot(diabetes_data$EDUC)
+```
+
+It seems that there are the most in the high school degree and college degree holding categories, which is intuitive. It also seems that, from the data dictionary, as the number increases education level also increases.
+
+```{r}
+diabetes_data<-na.omit(diabetes_data)
+
+ggplot(diabetes_data, aes(x = factor(EDUC), fill = factor(DIABETICEV))) +
+  geom_bar()
+```
+
+Let's now get to cleaning the hours worked per week column.
+
+```{r}
+ggplot(diabetes_data, aes(x = HOURSWRK, fill = factor(DIABETICEV))) +
+  geom_histogram()
+```
+
+```{r}
+unique(diabetes_data$HOURSWRK)
+```
+
+Let's set all 97, 98, and 99 to NA since those correspond with unknown values.
+
+```{r}
+diabetes_data$HOURSWRK[diabetes_data$HOURSWRK %in% c(97, 98, 99)] <- NA
+```
+
+Let's look at our third variable, health insurance.
+
+```{r}
+unique(diabetes_data$HINOTCOVE)
+```
+
+Look's like we just have to get rid of the 9 value, which is unknown.
+
+```{r}
+diabetes_data$HINOTCOVE[diabetes_data$HINOTCOVE %in% c(9)] <- NA
+```
+
+Let's look at a plot briefly.
+
+```{r}
+diabetes_data<-na.omit(diabetes_data)
+
+ggplot(diabetes_data, aes(x = factor(HINOTCOVE), fill = factor(DIABETICEV))) +
+  geom_bar()
+```
+
+Let's now look at and clean the data for exercise, in particular let's see if vigorous activity has any effect on diabetes.
+
+```{r}
+unique(diabetes_data$VIG10DMIN)
+```
+
+This is a numeric variable, so we can just filter out the relevant NA values, namely 000, 997, 998, and 999. We must also deal with 996 because the extreme values might interfere with our calculations since this is a numeric variable. Since we don't know what the extreme values are, let's set them to the maximum value of our dataset to avoid any potential leverage points. We see that 720 is the largest value.
+
+```{r}
+diabetes_data$VIG10DMIN[diabetes_data$VIG10DMIN %in% c(0, 997, 998, 999)] <- NA
+diabetes_data$VIG10DMIN[diabetes_data$VIG10DMIN %in% c(996)] <- 720
+```
+
+```{r}
+max(diabetes_data$VIG10DMIN[diabetes_data$VIG10DMIN < 996])
+```
+
+```{r}
+unique(diabetes_data$VIG10DMIN)
+```
+
+```{r}
+ggplot(diabetes_data, aes(x = VIG10DMIN, fill = factor(DIABETICEV))) +
+  geom_histogram()
+```
+
+As our fifth variable, let's check out the diets, namely their consumption of salads.
+
+```{r}
+unique(diabetes_data$SALADSNO)
+```
+
+Let's keep 0, since that just indicates very low salad consumption, and let's also keep 95 as our extreme value. Let's remove 996, 997, 998, and 999 because those are unknown values.
+
+```{r}
+diabetes_data$SALADSNO[diabetes_data$SALADSNO %in% c(996, 997, 998, 999)] <- NA
+```
+
+```{r}
+diabetes_data<-na.omit(diabetes_data)
+ggplot(diabetes_data, aes(x = SALADSNO, fill = factor(DIABETICEV))) +
+  geom_histogram()
+```
+
+Now that we have all 5 of our variables, we can make use of our support vector machine.
+
+Let's create our training and test splits.
+
+```{r}
+#Remove all NA values one more time
+
+diabetes_data<-na.omit(diabetes_data)
+
+samp<-sample(1:nrow(diabetes_data),nrow(diabetes_data)/2)
+
+train<-diabetes_data[samp,]
+
+test<-diabetes_data[-samp,]
+
+#Let's clean out any NA values from the train and test
+
+train<-na.omit(train)
+
+test<-na.omit(test)
+```
+
+```{r}
+
+svmdiabetes<-svm(DIABETICEV ~SALADSNO+ VIG10DMIN+HINOTCOVE+HOURSWRK+EDUC, data=train, kernel="linear", cost=0.01, scale=TRUE)
+
+summary(svmdiabetes)
+```
+
+Let's try making some predictions.
+
+```{r}
+pred_train<-predict(svmdiabetes,train, type="response")
+table(pred_train, train$DIABETICEV)
+```
+
+Here, we see that we are completely predicting non-diabetic, which is an issue.
+
+Let's check the test error.
+
+```{r}
+pred_test<-predict(svmdiabetes , test, type="response")
+table(pred_test, test$DIABETICEV)
+```
+
+We are also testing completely labeling 1. This is a problem. We can try using the tune() function, but this will tune only to try to capture accuracy. Let's see if we can try taking the recall, in other words, seeing if we can correctly maximize the number of correctly predicted values. This is precision, the number of true positives out all positives. Currently, since we've predicted none, our precision is 0.
+
+```{r}
+0/(0+232)
+```
+
+Let's try downsizing
+
+```{r}
+diabetes <- subset(diabetes_data, DIABETICEV == 2)
+nrow(diabetes)
+```
+
+We've got around 433 results.
+
+Let's check non-diabetes individuals.
+
+```{r}
+nondiabetes <- subset(diabetes_data, DIABETICEV == 1)
+nrow(nondiabetes)
+```
+
+This is about 8876 results. This is a lot more. But, problematically, this isn't as much data as we first desired. However, this was likely due to getting rid of so many NA values.
+
+I propose we downsize our non-diabetes data to match the diabetes data. However, this will have the negative drawback of leaving us with an extremely small amount of data.
+
+```{r}
+samp<-sample(1:nrow(nondiabetes),nrow(diabetes)*1.15, replace=FALSE)
+nondiabetes2<-nondiabetes[samp,]
+```
+
+```{r}
+data<-rbind(diabetes, nondiabetes2)
+```
+
+```{r}
+diabetes_data2<-data
+
+```
+
+```{r}
+#Remove all NA values on more time
+
+diabetes_data2<-na.omit(diabetes_data2)
+
+diabetes_data2$EDUC<-as.numeric(diabetes_data2$EDUC)
+
+diabetes_data2<-diabetes_data2[,c("DIABETICEV", "SALADSNO", "VIG10DMIN",
+"HINOTCOVE", "HOURSWRK", "EDUC")]
+
+#We're going to scale the numeric data here.
+
+scale_columns <- scale(diabetes_data2[, c("SALADSNO", "VIG10DMIN", "HOURSWRK", "EDUC")])
+diabetes_data2[, c("SALADSNO", "VIG10DMIN", "HOURSWRK", "EDUC")] <- scale_columns
+```
+
+```{r}
+
+samp<-sample(1:nrow(diabetes_data2),nrow(diabetes_data2)/2)
+
+train<-diabetes_data2[samp,]
+
+test<-diabetes_data2[-samp,]
+
+#Let's clean out any NA values from the train and test
+
+train<-na.omit(train)
+
+test<-na.omit(test)
+```
+
+```{r}
+
+svmdiabetes2<-svm(DIABETICEV ~SALADSNO+ VIG10DMIN+HINOTCOVE+HOURSWRK+EDUC, data=train, kernel="linear", cost=0.01, scale=TRUE)
+
+summary(svmdiabetes2)
+```
+
+```{r}
+pred_test<-predict(svmdiabetes2 , test, type="response")
+table(pred_test, test$DIABETICEV)
+```
+
+```{r}
+t<-table(pred_test, test$DIABETICEV)
+sum(diag(t))/sum(t)
+```
+
+This isn't a very good accuracy rate. It's also made worse by the fact that, from above, we had too many support vectors.
+
+```{r}
+summary(svmdiabetes2)
+
+```
+
+```{r}
+plot(svmdiabetes2, train, VIG10DMIN ~ EDUC)
+
+```
+
+```{r}
+plot(svmdiabetes2, train, HOURSWRK ~ SALADSNO)
+```
+
+```{r}
+plot(svmdiabetes2, train, VIG10DMIN ~ HOURSWRK)
+
+```
+
+```{r}
+plot(svmdiabetes2, train, VIG10DMIN ~ SALADSNO)
+
+```
+
+```{r}
+plot(svmdiabetes2, train, EDUC ~ HINOTCOVE)
+
+```
+
+```{r}
+plot(svmdiabetes2, train, HOURSWRK ~ EDUC)
+
+```
+
+```{r}
+plot(svmdiabetes2, train, HOURSWRK ~ HINOTCOVE)
+
+```
+
+Let's try using the tune function.
+
+```{r}
+tune.out <- tune(svm, DIABETICEV ~SALADSNO+ VIG10DMIN+HINOTCOVE+HOURSWRK+EDUC , data = train, kernel = "linear",
+    ranges = list(cost = c(0.01, 0.05, 0.1, 1, 5, 10)))
+```
+
+```{r}
+summary(tune.out)
+```
+
+```{r}
+
+svmdiabetes2<-svm(DIABETICEV ~SALADSNO+ VIG10DMIN+HINOTCOVE+HOURSWRK+EDUC, data=train, kernel="linear", cost=0.05, scale=TRUE)
+
+summary(svmdiabetes2)
+```
+
+```{r}
+pred_test<-predict(svmdiabetes2 , test, type="response")
+table(pred_test, test$DIABETICEV)
+```
+
+```{r}
+t<-table(pred_test, test$DIABETICEV)
+sum(diag(t))/sum(t)
+lin_acc<-sum(diag(t))/sum(t)
+```
+
+This isn't too much of an improvement
+
+Let's try radial svm.
+
+```{r}
+
+svmdiabetes_rad<-svm(DIABETICEV ~SALADSNO+ VIG10DMIN+HINOTCOVE+HOURSWRK+EDUC, data=train, kernel="radial", cost=0.05, scale=TRUE)
+
+summary(svmdiabetes_rad)
+```
+
+```{r}
+pred_test<-predict(svmdiabetes_rad , test, type="response")
+table(pred_test, test$DIABETICEV)
+```
+
+```{r}
+t<-table(pred_test, test$DIABETICEV)
+sum(diag(t))/sum(t)
+```
+
+```{r}
+tune.out <- tune(svm, DIABETICEV ~SALADSNO+ VIG10DMIN+HINOTCOVE+HOURSWRK+EDUC , data = train, kernel = "radial",
+    ranges = list(cost = c(0.01, 0.05, 0.1, 1, 5, 10)))
+```
+
+```{r}
+summary(tune.out)
+```
+
+```{r}
+
+svmdiabetes_rad<-svm(DIABETICEV ~SALADSNO+ VIG10DMIN+HINOTCOVE+HOURSWRK+EDUC, data=train, kernel="radial", cost=1, scale=TRUE)
+
+summary(svmdiabetes_rad)
+```
+
+```{r}
+pred_test<-predict(svmdiabetes_rad , test, type="response")
+table(pred_test, test$DIABETICEV)
+```
+
+```{r}
+t<-table(pred_test, test$DIABETICEV)
+sum(diag(t))/sum(t)
+rad_acc<-sum(diag(t))/sum(t)
+```
+
+```{r}
+plot(svmdiabetes_rad, train, VIG10DMIN ~ EDUC)
+
+```
+
+```{r}
+plot(svmdiabetes_rad, train, HOURSWRK ~ SALADSNO)
+
+```
+
+```{r}
+plot(svmdiabetes_rad, train, VIG10DMIN ~ HOURSWRK)
+
+```
+
+```{r}
+plot(svmdiabetes_rad, train, VIG10DMIN ~ SALADSNO)
+
+```
+
+```{r}
+plot(svmdiabetes_rad, train, EDUC ~ HINOTCOVE)
+
+```
+
+```{r}
+plot(svmdiabetes_rad, train, HOURSWRK ~ EDUC)
+
+```
+
+```{r}
+plot(svmdiabetes_rad, train, HOURSWRK ~ HINOTCOVE)
+
+```
+
+Let's finally check polynomial svm.
+
+```{r}
+
+svmdiabetes_poly2<-svm(DIABETICEV ~SALADSNO+ VIG10DMIN+HINOTCOVE+HOURSWRK+EDUC, data=train, kernel="polynomial",degree=2, cost=0.1, scale=TRUE)
+
+summary(svmdiabetes_poly2)
+```
+
+```{r}
+pred_test<-predict(svmdiabetes_poly2 , test, type="response")
+table(pred_test, test$DIABETICEV)
+```
+
+```{r}
+t<-table(pred_test, test$DIABETICEV)
+sum(diag(t))/sum(t)
+```
+
+```{r}
+tune.out <- tune(svm, DIABETICEV ~SALADSNO+ VIG10DMIN+HINOTCOVE+HOURSWRK+EDUC , data = train, kernel = "polynomial", degree=2,
+    ranges = list(cost = c(0.01, 0.05, 0.1, 1, 5, 10)))
+```
+
+```{r}
+summary(tune.out)
+```
+
+```{r}
+svmdiabetes_poly2<-svm(DIABETICEV ~SALADSNO+ VIG10DMIN+HINOTCOVE+HOURSWRK+EDUC, data=train, kernel="polynomial",degree=2, cost=0.5, scale=TRUE)
+
+summary(svmdiabetes_poly2)
+```
+
+```{r}
+pred_test<-predict(svmdiabetes_poly2 , test, type="response")
+table(pred_test, test$DIABETICEV)
+```
+
+```{r}
+t<-table(pred_test, test$DIABETICEV)
+sum(diag(t))/sum(t)
+poly2_acc<-sum(diag(t))/sum(t)
+```
+
+```{r}
+plot(svmdiabetes_poly2, train, VIG10DMIN ~ EDUC)
+
+```
+
+```{r}
+plot(svmdiabetes_poly2, train, HOURSWRK ~ SALADSNO)
+
+```
+
+```{r}
+plot(svmdiabetes_poly2, train, VIG10DMIN ~ HOURSWRK)
+
+```
+
+```{r}
+plot(svmdiabetes_poly2, train, VIG10DMIN ~ SALADSNO)
+
+```
+
+```{r}
+plot(svmdiabetes_poly2, train, EDUC ~ HINOTCOVE)
+
+```
+
+```{r}
+plot(svmdiabetes_poly2, train, HOURSWRK ~ EDUC)
+
+```
+
+```{r}
+plot(svmdiabetes_poly2, train, HOURSWRK ~ HINOTCOVE)
+
+```
+
+Let's try higher degrees of polynomial.
+
+```{r}
+tune.out <- tune(svm, DIABETICEV ~SALADSNO+ VIG10DMIN+HINOTCOVE+HOURSWRK+EDUC , data = train, kernel = "polynomial", degree=3,
+    ranges = list(cost = c(0.01, 0.05, 0.1, 1, 5, 10)))
+```
+
+```{r}
+summary(tune.out)
+```
+
+```{r}
+svmdiabetes_poly3<-svm(DIABETICEV ~SALADSNO+ VIG10DMIN+HINOTCOVE+HOURSWRK+EDUC, data=train, kernel="polynomial",degree=3, cost=1, scale=TRUE)
+
+```
+
+```{r}
+pred_test<-predict(svmdiabetes_poly3 , test, type="response")
+table(pred_test, test$DIABETICEV)
+
+```
+
+```{r}
+t<-table(pred_test, test$DIABETICEV)
+poly3_acc<-sum(diag(t))/sum(t)
+sum(diag(t))/sum(t)
+```
+
+```{r}
+plot(svmdiabetes_poly3, train, VIG10DMIN ~ EDUC)
+
+```
+
+```{r}
+plot(svmdiabetes_poly3, train, HOURSWRK ~ SALADSNO)
+
+```
+
+```{r}
+plot(svmdiabetes_poly3, train, VIG10DMIN ~ HOURSWRK)
+
+```
+
+```{r}
+plot(svmdiabetes_poly3, train, VIG10DMIN ~ SALADSNO)
+
+```
+
+```{r}
+plot(svmdiabetes_poly3, train, EDUC ~ HINOTCOVE)
+
+```
+
+```{r}
+plot(svmdiabetes_poly3, train, HOURSWRK ~ EDUC)
+
+```
+
+```{r}
+plot(svmdiabetes_poly3, train, HOURSWRK ~ HINOTCOVE)
+
+```
+
+```{r}
+metrics <- data.frame(
+  Kernel = c("Linear", "Radial", "Quadratic","Cubic"),
+  Value = c(lin_acc, rad_acc, poly2_acc, poly3_acc)
+)
+ggplot(data=metrics, aes(x=Kernel, y=Value, fill=Kernel))+geom_bar(stat="identity")+labs(title="Metrics for Support Vector Machine Kernels")
+```
